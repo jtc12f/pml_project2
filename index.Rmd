@@ -1,0 +1,114 @@
+Practical Machine Learning: Final Project
+========================================
+##by J.C., May 13, 2018
+We've got lots of data taken from sensors that were placed on people while they were working out. But consider this: how does this data relate to more subjective kinds of information, like the *quality* of the workouts being performed? This is where data science comes in. We can take the mountains of numeric fitness data and use it to predict the "class" of workout quality.  
+
+Here is a description of the data from the Coursera project description:  
+*Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).*
+
+##The Data
+The first step is to download the data into R. The first file (assigned to the object "data") is the dataset I'll be partitioning to develop and evaluate the models. The second file (assigned to the object "finalTest") is the dataset missing the classe variable, which the model must effectively predict. 
+
+```{r, cache=TRUE}
+tmp <- tempfile()
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = tmp)
+data <- read.csv(tmp)
+rm(tmp)
+
+tmp2 <- tempfile()
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = tmp2)
+finalTest <- read.csv(tmp2)
+rm(tmp2)
+```
+
+##Data Partitioning (preparing for cross-validation)
+First, I pull off 30% of the data to be used as a validation set and leave the other 70% to develop and run an intial test on the models. I then further partition the development set into a training and testing set. I partition on the variable "classe", which is the outcome we're trying to predict. 
+```{r, cache = TRUE}
+library(caret)
+inDev <- createDataPartition(y=data$classe, p = 0.7, list = FALSE)
+validation <- data[-inDev,]
+development <- data[inDev,]
+inTrain <- createDataPartition(y=development$classe, p = 0.7, list = FALSE)
+training <- development[inTrain,]
+testing <- development[-inTrain,]
+```
+
+##EDA and Removal of Columns
+In examining the data, one sees that there are variables that articulate measures of central tendency and variability for the other variables. This results in the variables being majority-NA, which is not useful for model building. So in this code I search for the column names like "avg" and "stddev", etc., assign them for removal. I also pull out the ID variables, which would result in overfitting to the training datasets. I run this same transformation on the training, test, validation, and final test set. 
+```{r, cache = TRUE}
+to_remove <- c(grep("avg", names(training)),
+               grep("stddev", names(training)),
+               grep("var", names(training)), 
+               grep("amplitude", names(training)), 
+               grep("kurtosis", names(training)), 
+               grep("skewness", names(training)), 
+               grep("max", names(training)), 
+               grep("min", names(training)),
+               1:7) ##ID columns
+
+subsTrain <- training[,-to_remove]
+subsTest <- testing[,-to_remove]
+subsValid <- validation[,-to_remove]
+subsFT <- finalTest[,-to_remove]
+```
+
+##Model Building
+Here I build three different models to predict the "classe" variable. The first is a random forest, the second is a generalized boosted model, and the third is a model that combines the two. I then use the models to predict against the test set, and find the accuracy. 
+
+## Random Forest Model
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+mod1 <- train(classe~., data = subsTrain, method = "rf")
+pred1 <- predict(mod1, newdata = subsTest)
+rf <- as.data.frame(confusionMatrix(pred1, subsTest$classe)[3])[1,1]
+```
+
+## Generalized Boosted Model
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+ignore <- capture.output(
+mod2 <- train(classe~., data = subsTrain, method = "gbm"))
+pred2 <- predict(mod2, newdata = subsTest)
+gbm <- as.data.frame(confusionMatrix(pred2, subsTest$classe)[3])[1,1]
+```
+
+## Combined Model
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+comboDF <- data.frame(pred1,pred2,classe = subsTest$classe)
+mod3 <- train(classe~., data = comboDF, method = "rf")
+pred3 <- predict(mod3, newdata = subsTest)
+combined <- as.data.frame(confusionMatrix(pred3, subsTest$classe)[3])[1,1]
+```
+
+##Assessing the Models
+The accuracy matrix shows us that the random forest model is just as effective as the combined model, so for the sake of simplicity this is the model I'll use to run my predictions. Here is a table of the accuracy / out-of-sample error rates using the test set.  
+```{r, cache = TRUE}
+library(knitr)
+
+
+
+accuracy_table <- data.frame(`Random Forest` = rf,`Generalized Boosted Model` = gbm,`Combined Model`= combined)
+out_of_sample_error <- 1 - accuracy_table 
+
+accuracy_table = rbind(accuracy_table, out_of_sample_error)
+row.names(accuracy_table) <- c("Accuracy", "Out of Sample Error (test set)")
+kable(accuracy_table, caption = "Accuracy / Error")
+```
+
+
+Now let's take a look at the full confusion matrix. 
+```{r, cache=TRUE}
+predValid <- predict(mod1, newdata = subsValid)
+validationAccuracy <- as.data.frame(confusionMatrix(predValid, subsValid$classe)[3])[1,1]
+confusionMatrix(predValid, subsValid$classe)
+                                 
+```
+
+Not bad, eh? Still looking at an accuracy of `r validationAccuracy` in the validation set, which is just a smidge below the out-of-sample accuracy of  `r rf`, which was taken from the test set. This ought to do the trick. So now I can predict the values on the final test set. I've already transformed this data (i.e., removed the unnecessary columns), so all I need to do now is predict the "classe" values based on the random forest model I like so much. 
+
+##Predicting *Classe* from the Final Test Set
+```{r, cache=TRUE}
+results <- predict(mod1, newdata = subsFT)
+```
+ Drumroll please...  
+ The answers are: `r results`  
+   
+In case you were wondering, these results turn out to be 100% correct. Huzzah! On a large enough data set (like the validation set) there will be some misclassification, but on these 20 test cases it seemed to work out OK. 
